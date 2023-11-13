@@ -1,0 +1,444 @@
+# ======================================= Пролог ============================================
+
+# Для того чтобы понять, что делает тот или иной код необходимо вначале понять контекст где он применяется или где
+# его можно применить. Другими словами понять систему координат и наше текущее положение в ней.
+# Данной системой координат в Django является архитектура MTV (она же MVC):
+# Model - плоскость работы с базами данных
+# Template - плоскость шаблонов HTML контента возвращаемой web страницы
+# View - основная логика приложений
+#  - принимает HTTP Request от клиента, приведённого к объекту 'request' для работы с ним в рамках python
+#  (уровень абстракции, позволяющий нам работать с протоколом сетевого взаимодействия HTTP в языке программирования)
+#  - используя данные из БД, шаблон web страницы, алгоритм бизнес логики, View возвращает конечную web страницу, также
+# в виде объекта python.
+# Мы находимся на этапе написания View, где Django любезно предоставляет нам возможности сократить написание кода,
+# используя уже созданные 'заготовки': shortcuts ('короткий путь')
+# Ниже представлен исходный код модуля django/shortcuts.py с описанием
+
+# Документ строка, является правилом хорошего тона написания кода. Выполняет функции:
+# - даёт представление программисту представление о том что выполняет код
+# - может быть вызвана в консоли python через dunder method объекта __doc__() или help(object) функцию.
+"""
+This module collects helper functions and classes that "span" multiple levels
+of MVC. In other words, these functions/classes introduce controlled coupling
+for convenience's sake.
+"""
+
+# ======================================= Импортирование внешнего кода ============================================
+
+# импортирование классов, объектов из других модулей в текущее пространство имён (NameSpace)
+
+from django.http import (
+    Http404,
+    HttpResponse,
+    HttpResponsePermanentRedirect,
+    HttpResponseRedirect,
+)
+# пример: внутри пакета (package) django есть другой пакет template. Из пакет-а template импортируй в текущий namespace
+# модуль (module) loader под именем loader. Результатом выполнения этой команды будет выполнение кода модуля loader
+# интерпретатором python, создание объекта loader с аттрибутами и методами соответствующими переменным и функциям,
+# определённым в модуле loader.
+# И уже к объекту loader мы можем обращаться в текущем контексте (пространстве имён)
+from django.template import loader
+from django.urls import NoReverseMatch, reverse
+from django.utils.functional import Promise
+
+
+# ======================================= Функция render ============================================
+# Зачем нам эта функция: На основе объекта-запроса, шаблона, вычисленных шаблонных параметров сгенерировать HTTP ответ,
+# который может быть возвращён web клиенту на его запрос.
+
+# def render( request, template_name, context=None, content_type=None, status=None, using=None )
+# Декларирование/ объявление функции с именем 'render' и следующими параметрами:
+# request - обязательный параметр, объект представляющий абстракцию на HTTP Request клиента.
+#     Любая функция View принимает этот параметр первым.
+# template_name - обязательный параметр, имя шаблоны или их последовательность для генерации возвращаемой
+#     страницы. В случае указанной последовательности, первый найденный шаблон будет использован.
+# context - опциональный параметр, значение по умолчанию: None.
+#     Словарь значений, который будет использован для подставления значений в переменные шаблона.
+# content_type - опциональный параметр, значение по умолчанию: None. Значение Content-Type в HTTP Header ответа.
+# status - опциональный параматр, значение по умолчанию: None. Значение Status Code в HTTP Header ответа.
+# using - опциональный параметр, значение по умолчанию: None.
+#     параметр using даёт возможность выбора движка обработки шаблонов (DTL, Jinja2, etc)
+
+# Цель данной функции:
+# Сформировать и вернуть объект класса HttpResponse используя значения переданных ей параметров
+
+def render(
+        request, template_name, context=None, content_type=None, status=None, using=None
+):
+    """
+    Return an HttpResponse whose content is filled with the result of calling
+    django.template.loader.render_to_string() with the passed arguments.
+    """
+    # Вызов функции render_to_string модуля loader (или метода render_to_string объекта loader в текущем пространстве
+    # имён) со следующими позиционными аргументами: template_name, context, request и одним именованным: using.
+    # Результат, сгенерированная строка HTML, присваивается переменной content
+
+    content = loader.render_to_string(template_name, context, request, using=using)
+
+    # Создание экземпляра класса HttpResponse (class HttpResponse instance) путём вызова его конструктора с аргументами:
+    # content, content_type, status
+    # content - значение переменой вычислено выше
+    # content_type - параметр функции render без именений
+    # status - параметр функции render без именений
+    # Замечание: dander метод класса __init__ не является конструктором экзепляров, а его initiator-ом.
+    # Сам объект создаётся в методе класса __new__ и только потом ссылка на него передаётся в метод __init__ первым
+    # аргументом, как правило, носящего имя self, для дальнейшей инициализации объекта.
+
+    # Созданный экземляр класса HttpResponse возвращается функцией render. В свою очередь,
+    # экземляр этого класса может быть возвращён самой View, тогда web клиент получит HTTP ответ на свой запрос в виде
+    # сгенерированной раннее страницы
+    return HttpResponse(content, content_type, status)
+
+
+# ======================================= Функция redirect ============================================
+# == Что реализовано? ==
+# Зачем нам эта дополнительная функция: Имея модель, view или URL, а также дополнительные параметры одним действием
+# получить объект Redirect-a, который может быть возвращён web клиенту, т.е. быть результатом выполнения View
+#
+# == Как реализовано? ==
+# Декларирование функции c именем redirect и следующими параметрами:
+# to - обязательный параметр, принимающий значение объекта одного из классов: модель, view или URL
+#     В зависимости от класса объекта для извлечения конечного URL для Redirect будут использованы разные функции:
+#     model - `get_absolute_url()`
+#     view name - `urls.reverse()`
+#     URL - будет использоваться без изменений
+# *args - собирает все оставшиеся позиционные аргументы в кортеж (tuple) args
+#     Чтобы понять как работает unpacking (*) в python, достаточно взглянуть на следующий пример из интерактивного
+#     режима интерпретатора python:
+#      >>> q, *w = 4, 5, 7
+#      >>> w
+#      [5, 7]
+# permanent - опциональный параметр, значение по умолчанию: False.
+#     Значение этого параметра определяет тип Redirect-a и соответственно код HTTP ответа:
+#     301 	Permanent
+#     302 	Temporary
+# **kwargs - собирает все оставшиеся именованные аргументы в словарь (dictionary) kwargs
+
+# Цели данной фунции:
+# На основе типа первого аргумента определить связанный с ним URL (это выполняет вызов функции resolve_url)
+# В зависимости от значения параметра permanent выбрать класс будущего объекта Redirect-a:
+# HttpResponsePermanentRedirect or HttpResponseRedirect
+# Создать экземпляр (объект) выбранного класса и вернуть его из функции
+
+def redirect(to, *args, permanent=False, **kwargs):
+    """
+    Return an HttpResponseRedirect to the appropriate URL for the arguments
+    passed.
+
+    The arguments could be:
+
+        * A model: the model's `get_absolute_url()` function will be called.
+
+        * A view name, possibly with arguments: `urls.reverse()` will be used
+          to reverse-resolve the name.
+
+        * A URL, which will be used as-is for the redirect location.
+
+    Issues a temporary redirect by default; pass permanent=True to issue a
+    permanent redirect.
+    """
+    # Применение тернарного оператора в python, и звучит следующая запись так:
+    # Присвоить переменной redirect_class ссылку на класс HttpResponsePermanentRedirect если "permanent" истинно и
+    # и ссылку на класс HttpResponseRedirect в противном случае.
+    # По сути этот "синтаксический сахар" заменяет фрагмент кода:
+    # if permanent is True:
+    #     redirect_class = HttpResponsePermanentRedirect
+    # else:
+    #     redirect_class = HttpResponseRedirect
+
+    redirect_class = (
+        HttpResponsePermanentRedirect if permanent else HttpResponseRedirect
+    )
+
+    # Выполняется функция resolve_url(to, *args, **kwargs), её результатом является URL связанный с объектом "to".
+    #     В парадигме Django URL связан с View, может иметь имя, и может быть связан с моделью БД.
+    #     URL соответсвующий Модели определяется в её методе get_absolute_url.
+    #
+    # Результат выполнения функции resolve_url является единственным аргументом конструктора класса HttpResponseRedirect
+    # или HttpResponsePermanentRedirect.
+    # Далее полученый экземпляр возвращается функцией redirect
+    return redirect_class(resolve_url(to, *args, **kwargs))
+
+
+# ======================================= Функция _get_queryset ============================================
+# _get_queryset метод является Protected method, что значит что он не должен вызываться из вне,
+# только из кода текущего модуля. Язык python не реализует в полной мере контроль доступа Public, Protected, Private к
+# атрибутам и методам как другие языки (C++, C#, Java), но делает это на уровне договоренности именования атрибутов.
+# arg - Public argument
+# _arg - Protected
+# __arg - Private
+
+# == Как реализовано? ==
+# Декларирование функции c именем _get_queryset и следующими параметрами:
+# klass - обязательный параметр, принимающий значение объекта одного из классов: QuerySet, Manager или класс Model
+# Возвращает QuerySet или Manager относящийся ко всем элементам таблицы БД описанной в Model, или сами входные
+# параметры QuerySet, Manager без изменений
+#
+def _get_queryset(klass):
+    """
+    Return a QuerySet or a Manager.
+    Duck typing in action: any class with a `get()` method (for
+    get_object_or_404) or a `filter()` method (for get_list_or_404) might do
+    the job.
+    """
+    # If it is a model class or anything else with ._default_manager
+
+    # Проверяется наличие атрибута (метода) с именем "_default_manager" у входного объекта параметра "klass"
+    # Этот атрибут является атрибутом определёным по-умолчанию в класс-ах моделей БД
+    if hasattr(klass, "_default_manager"):
+        # Если атрибут присутствует, то для объекта на который ссылается данный атрибут выполнить метод all
+        # По сути мы создаем экземпляр QuerySet охватывающий все записи таблицы БД соответствующей модели klass
+        return klass._default_manager.all()
+    # Если атрибут отсутствует вернуть входной параетр без изменений
+    return klass
+
+
+# ======================================= Функция get_object_or_404 ============================================
+# == Что реализовано? ==
+# Зачем нам эта функция: Эта функция работы с базой данных. Имея Model, QuerySet функция get_object_or_404 даёт
+# возможность вернуть один объект их базы данных на основе дополнительных параметров фильтрации или вернуть исключение,
+# в случае нескольких найденных объектов или отсутствия таковых.
+#
+# == Как реализовано? ==
+# Обратимся к документации Django за  определениями классов Model, QuerySet, Manager:
+# A Model is the single, definitive source of information about your data. Each model maps to a single database table.
+# A QuerySet represents a collection of objects from your database.
+# The Manager is the main source of QuerySets for a model.
+# И с этими определениями в путь:
+# Декларирование функции с именем get_object_or_404 и следующими параметрами:
+# klass - обязательный параметр, принимающий значение объекта одного из классов: Model, Manager или QuerySet
+# *args - собирает все оставшиеся позиционные аргументы в кортеж (tuple) args
+# **kwargs - собирает все оставшиеся именованные аргументы в словарь (dictionary) kwargs
+# Параметры заключённые в args и kwargs будут использованы для последующей фильтрации, нам же нужен один объект из
+# таблицы базы данных.
+#
+def get_object_or_404(klass, *args, **kwargs):
+    """
+    Use get() to return an object, or raise an Http404 exception if the object
+    does not exist.
+
+    klass may be a Model, Manager, or QuerySet object. All other passed
+    arguments and keyword arguments are used in the get() query.
+
+    Like with QuerySet.get(), MultipleObjectsReturned is raised if more than
+    one object is found.
+    """
+    # Вызывается раннее описанная фунция _get_queryset с аргументом klass. Результат её выполнения, экземпляр класса
+    # QuerySet присваивается переменной queryset
+    #
+    # Перед тем как двигаться дальше необходимо убедиться что у объекта в переменной queryset определён метод get()
+    # В противном случае в качестве аргумена klass не был передан экзепляр Model, Manager или QuerySet. В этом случае
+    # будет выбрашено исключение ValueError
+    #
+    queryset = _get_queryset(klass)
+
+    # Функция hasattr вернёт True если в объекте queryset определён атрибут или метод 'get', и False в противном случае
+    #
+    if not hasattr(queryset, "get"):
+        # Если условие верно, т.е. queryset НЕ обладает методом get, то определим класс, чьим экземпляром является
+        # переданный параметр klass или имя самого класса если был передан сам класс.
+
+        # Тернарный оператор
+
+        klass__name = (
+            # Любой класс в python-e является экземпляром мета-класса type. Если результат isinstance(klass, type) True,
+            # то klass является классом, и его имя извлекается из klass.__name__ атрибута
+            # в противном случае мы имеем дело с объектом обычного класса (не мета-класса) и имя его класса хранится
+            # в атрибуте klass.__class__.__name__ (у объекта klass есть атрибут __class__, который является
+            # ссылкой на его родительский класс, а уже к него есть атрибут __name__ содержащий имя этого класса )
+            klass.__name__ if isinstance(klass, type) else klass.__class__.__name__
+        )
+
+        # Выбросить исключение с сообщением, содержащим имя класса объекта переданного в параметр klass
+        raise ValueError(
+            "First argument to get_object_or_404() must be a Model, Manager, "
+            "or QuerySet, not '%s'." % klass__name
+        )
+
+    #
+    # Блок try/except/else/finally позволяет перехватывать исключения и обрабатывать их
+    # без аварийной остановки всей программы
+    #
+    try:
+        #  Произвести поиск в базе данных оъекта удовлетворяющего условиям из параматров *args, **kwargs
+        return queryset.get(*args, **kwargs)
+    # Перехватчик исключения класса queryset.model.DoesNotExist
+    except queryset.model.DoesNotExist:
+        # Обработчик исключения
+        # Принудительная генерация исключения, будет создан и вовращён из функции экземпляр-исключение класса Http404
+        # содержащий описание, об отсутствии объекта в таблице базы данных удовлетворяющего запросу.
+        raise Http404(
+            # queryset.model (атрибут model объекта queryset)._meta (атрибут _meta объекта model) .object_name
+            # (атрибут object_name объекта _meta)
+
+            # Форматирование строк используя оператор %
+            "No %s matches the given query." % queryset.model._meta.object_name
+        )
+
+
+# ======================================= Функция aget_object_or_404 ============================================
+# == Что реализовано? ==
+# Зачем нам эта функция: Эта функция является асинхронным аналогом (корутиной) вышеописанной функции get_object_or_404
+# Её цель произвести запрос к базе данных без блокирования основного потока выполнения
+# == Как реализовано? ==
+# описание во многом схоже с функцией  get_object_or_404, ключевое слово await рассмотрено ниже
+async def aget_object_or_404(klass, *args, **kwargs):
+    """See get_object_or_404()."""
+    queryset = _get_queryset(klass)
+    if not hasattr(queryset, "aget"):
+        klass__name = (
+            klass.__name__ if isinstance(klass, type) else klass.__class__.__name__
+        )
+        raise ValueError(
+            "First argument to aget_object_or_404() must be a Model, Manager, or "
+            f"QuerySet, not '{klass__name}'."
+        )
+    try:
+        # В Event loop-e этот код будет выполнен асинхронно, другими словами интерпретатор пойдёт дальше к следующей
+        # корутине не ожидая завершения метода-корутины "aget". Когда же она завершится, её результат будет возвращён
+        # внешней корутиной aget_object_or_404 через return. Функционал похож на применение Promise в JS
+
+        return await queryset.aget(*args, **kwargs)
+
+    except queryset.model.DoesNotExist:
+
+        raise Http404(f"No {queryset.model._meta.object_name} matches the given query.")
+
+
+# ======================================= Функция get_list_or_404 ============================================
+# == Что реализовано? ==
+# Зачем нам эта функция: Функция схожа с get_object_or_404 за исключением что пытатся достать и вернуть ни один объект,
+# как get_object_or_404, а список объектов, удовлетворяющих критериям фильтрации
+
+def get_list_or_404(klass, *args, **kwargs):
+    """
+    Use filter() to return a list of objects, or raise an Http404 exception if
+    the list is empty.
+
+    klass may be a Model, Manager, or QuerySet object. All other passed
+    arguments and keyword arguments are used in the filter() query.
+    """
+    queryset = _get_queryset(klass)
+    if not hasattr(queryset, "filter"):
+        klass__name = (
+            klass.__name__ if isinstance(klass, type) else klass.__class__.__name__
+        )
+        raise ValueError(
+            "First argument to get_list_or_404() must be a Model, Manager, or "
+            "QuerySet, not '%s'." % klass__name
+        )
+    obj_list = list(queryset.filter(*args, **kwargs))
+    if not obj_list:
+        raise Http404(
+            "No %s matches the given query." % queryset.model._meta.object_name
+        )
+    return obj_list
+
+
+# ======================================= Функция aget_list_or_404 ============================================
+# == Что реализовано? ==
+# Зачем нам эта функция: Эта функция является асинхронным аналогом (корутиной) вышеописанной функции get_list_or_404
+async def aget_list_or_404(klass, *args, **kwargs):
+    """See get_list_or_404()."""
+    queryset = _get_queryset(klass)
+    if not hasattr(queryset, "filter"):
+        klass__name = (
+            klass.__name__ if isinstance(klass, type) else klass.__class__.__name__
+        )
+        raise ValueError(
+            "First argument to aget_list_or_404() must be a Model, Manager, or "
+            f"QuerySet, not '{klass__name}'."
+        )
+    obj_list = [obj async for obj in queryset.filter(*args, **kwargs)]
+    if not obj_list:
+        raise Http404(f"No {queryset.model._meta.object_name} matches the given query.")
+    return obj_list
+
+
+# ======================================= Функция resolve_url ============================================
+# == Что реализовано? ==
+# Зачем нам эта функция: Эта функция позволяет получить URL входного ресурса: класса Model, объекта View или готовой
+# строки URL, применяя, при необходимости, дополнительные параметры args, kwargs.
+# Или вернуть исключение в случае если URL не будет найден.
+#
+# == Как реализовано? ==
+# В Django функции или классы View, Модели базы данных (опционально), доступны по определённому URL
+# (Uniform Resource Locator). Имея URL мы приходим к ресурсу View или содержимому таблицы БД напрямую.
+# Часто стоит обратная задача: необходимо получить URL к заданному ресурсу View, Model
+
+# Декларирование функции c именем resolve_url и следующими параметрами:
+# to - обязательный параметр, принимающий значение: класса Model, объекта View или строки URL
+# *args - собирает все оставшиеся позиционные аргументы в кортеж (tuple) args
+# **kwargs - собирает все оставшиеся именованные аргументы в словарь (dictionary) kwargs
+# Параметры заключённые в args и kwargs будут использованы для последующего формирования составного URL.
+
+def resolve_url(to, *args, **kwargs):
+    """
+    Return a URL appropriate for the arguments passed.
+
+    The arguments could be:
+
+        * A model: the model's `get_absolute_url()` function will be called.
+
+        * A view name, possibly with arguments: `urls.reverse()` will be used
+          to reverse-resolve the name.
+
+        * A URL, which will be returned as-is.
+    """
+    # If it's a model, use get_absolute_url()
+
+    # Проверяется наличие атрибута (метода) с именем "get_absolute_url" у входного объекта параметра "to"
+    # Этот метод является необязательным для моделей БД и только для них
+    if hasattr(to, "get_absolute_url"):
+        # В случае наличия данного метода делаем вывод что объект to это модель и вызываем этот метод.
+        # Результат выполнения метода get_absolute_url объекта to возвращается из главной функции
+        return to.get_absolute_url()
+
+    # Проверяем если параметр to содержит экземпляр класса Promise
+    # Если так, то переводим его в тип строка (при этом у объекта to будет вызван dunder __str__)
+
+    if isinstance(to, Promise):
+        # Expand the lazy instance, as it can cause issues when it is passed
+        # further to some Python functions like urlparse.
+
+        # Результат преобразования типа присваивается тому же параметру "to"
+        to = str(to)
+
+    # Handle relative URLs
+    # В случае если "to" является типом "строка" и эта строка начинается с символов  "./" или "../",
+    # то функцию параметром "to" был передан готовый URL, поэтому мы его возвращаем без изменений
+    if isinstance(to, str) and to.startswith(("./", "../")):
+        return to
+
+    # Next try a reverse URL resolution.
+    # Вызываем функцию reverse для параметра to с теми же получеными параметрами функции resolve_url
+    try:
+        # Если функция reverse отработала без ошибок/ исключений возвращаем результат её выполнения как результат
+        # выполнения основной функции resolve_url, в теле которой мы находимся
+        return reverse(to, args=args, kwargs=kwargs)
+
+    # В случае появления исключения класса NoReverseMatch выполнить следующий блок кода
+    except NoReverseMatch:
+        # If this is a callable, re-raise.
+        # Проверить если объект "to" можно вызывать, другими словами если у объекта "to" реализован метод "__call__"
+        if callable(to):
+            # Если да, то пере-выброси (re-raise) NoReverseMatch исключение
+            raise
+        # If this doesn't "feel" like a URL, re-raise.
+
+        # Проверить если символы "/" и "." не встречаются в строке значении параметра "to"
+        if "/" not in to and "." not in to:
+            # Если да, то пере-выброси (re-raise) NoReverseMatch исключение
+            raise
+
+    # Finally, fall back and assume it's a URL
+
+    # Если мы дошли до этого шага то параметр to содержит строку URL над которой никаких действий проводить и не надо
+    # Она (Строка URL) просто возвращается
+    return to
+
+# ================================== Эпилог ======================================
+# В данном задании я описал как я понимаю представленный код модуля Django
+# Программный код прежде всего является средством описания алгоритмов и логики чего-то большего.
+# Я же описал код полагаясь на свой уровень понимания основ Django и Асинхронности, так что не судите строго :)
